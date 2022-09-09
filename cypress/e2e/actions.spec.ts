@@ -1,8 +1,10 @@
+import { verifyFileSize } from './util';
 describe('Check actions', () => {
 	beforeEach(() => {
 		cy.clearLocalStorage();
 		cy.visit('/edit');
 	});
+
 	it('should update markdown code', () => {
 		cy.get('#markdown')
 			.invoke('val')
@@ -20,5 +22,27 @@ describe('Check actions', () => {
 		cy.get('#gist').type('https://gist.github.com/sidharthv96/6268a23e673a533dcb198f241fd7012a');
 		cy.contains('Load Gist').click();
 		cy.contains('Go shopping!!');
+	});
+
+	it('should download png and svg', () => {
+		cy.clock(new Date(2022, 0, 1).getTime());
+
+		cy.get(`#downloadPNG`).click();
+		verifyFileSize('diagram', 'png', 21_000);
+
+		cy.get(`#downloadSVG`).click();
+		verifyFileSize('diagram', 'svg', 10_000);
+
+		// Verify downloaded file is different for different diagrams
+		cy.contains('Sample Diagrams').click();
+		cy.contains('ER Diagram').click();
+
+		cy.get(`#downloadPNG`).click();
+		verifyFileSize('diagram', 'png', 46_000);
+
+		cy.get(`#downloadSVG`).click();
+		verifyFileSize('diagram', 'svg', 12_000);
+
+		cy.clock().invoke('restore');
 	});
 });

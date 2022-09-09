@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { updateCode } from '$lib/util/state';
 	import Card from '$lib/components/card/card.svelte';
+	import { logEvent } from '$lib/util/stats';
 
 	const samples = {
 		'Flow Chart': `graph TD
@@ -95,7 +96,11 @@
 	};
 
 	const loadSampleDiagram = (diagramType: string): void => {
-		updateCode(samples[diagramType], true, true);
+		updateCode(samples[diagramType], {
+			updateDiagram: true,
+			resetPanZoom: true
+		});
+		void logEvent('loadSampleDiagram', { diagramType });
 	};
 </script>
 

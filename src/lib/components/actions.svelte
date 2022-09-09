@@ -1,20 +1,23 @@
 <script lang="ts">
-	import { browser } from '$app/env';
-
+	import { browser } from '$app/environment';
 	import Card from '$lib/components/card/card.svelte';
 	import { krokiRendererUrl, rendererUrl } from '$lib/util/env';
 	import { pakoSerde } from '$lib/util/serde';
-	import { serializedState, codeStore } from '$lib/util/state';
+	import { stateStore } from '$lib/util/state';
+	import { logEvent } from '$lib/util/stats';
 	import { toBase64 } from 'js-base64';
 	import moment from 'moment';
 
 	type Exporter = (context: CanvasRenderingContext2D, image: HTMLImageElement) => () => void;
 
+	const getFileName = (ext: string) =>
+		`mermaid-diagram-${moment().format('YYYY-MM-DD-HHmmss')}.${ext}`;
+
 	const getBase64SVG = (svg?: HTMLElement, width?: number, height?: number): string => {
 		svg?.setAttribute('height', `${height}px`);
 		svg?.setAttribute('width', `${width}px`); // Workaround https://stackoverflow.com/questions/28690643/firefox-error-rendering-an-svg-image-to-html5-canvas-with-drawimage
 		if (!svg) {
-			svg = document.querySelector('#container svg');
+			svg = getSvgEl();
 		}
 		const svgString = svg.outerHTML
 			.replaceAll('<br>', '<br/>')
@@ -50,6 +53,23 @@
 		event.preventDefault();
 	};
 
+	const getSvgEl = () => {
+		const svgEl: HTMLElement = document
+			.querySelector('#container svg')
+			.cloneNode(true) as HTMLElement;
+		svgEl.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+		const fontAwesomeCdnUrl = Array.from(document.head.getElementsByTagName('link'))
+			.map((l) => l.href)
+			.find((h) => h && h.includes('font-awesome'));
+		if (fontAwesomeCdnUrl == null) {
+			return svgEl;
+		}
+		const styleEl = document.createElement('style');
+		styleEl.innerText = `@import url("${fontAwesomeCdnUrl}");'`;
+		svgEl.prepend(styleEl);
+		return svgEl;
+	};
+
 	const simulateDownload = (download: string, href: string): void => {
 		const a = document.createElement('a');
 		a.download = download;
@@ -62,7 +82,7 @@
 			const { canvas } = context;
 			context.drawImage(image, 0, 0, canvas.width, canvas.height);
 			simulateDownload(
-				`mermaid-diagram-${moment().format('YYYYMMDDHHmmss')}.png`,
+				getFileName('png'),
 				canvas.toDataURL('image/png').replace('image/png', 'image/octet-stream')
 			);
 		};
@@ -95,29 +115,34 @@
 
 	const onCopyClipboard = (event: Event) => {
 		exportImage(event, clipboardCopy);
+		void logEvent('copyClipboard');
 	};
 
 	const onDownloadPNG = (event: Event) => {
 		exportImage(event, downloadImage);
+		void logEvent('download', {
+			type: 'png'
+		});
 	};
 
 	const onDownloadSVG = () => {
-		simulateDownload(
-			`mermaid-diagram-${moment().format('YYYYMMDDHHmmss')}.svg`,
-			`data:image/svg+xml;base64,${getBase64SVG()}`
-		);
+		simulateDownload(getFileName('svg'), `data:image/svg+xml;base64,${getBase64SVG()}`);
+		void logEvent('download', {
+			type: 'svg'
+		});
 	};
 
 	const onCopyMarkdown = () => {
 		(document.getElementById('markdown') as HTMLInputElement).select();
 		document.execCommand('Copy');
+		void logEvent('copyMarkdown');
 	};
 
 	let gistURL = '';
-	codeStore.subscribe((state) => {
-		if (state.loader?.type === 'gist') {
+	stateStore.subscribe(({ loader }) => {
+		if (loader?.type === 'gist') {
 			// @ts-ignore Gist will have url
-			gistURL = state.loader.config.url;
+			gistURL = loader.config.url;
 		}
 	});
 
@@ -126,6 +151,7 @@
 			alert('Please enter a Gist URL first');
 		}
 		window.location.href = `${window.location.pathname}?gist=${gistURL}`;
+		void logEvent('loadGist');
 	};
 
 	let iUrl: string;
@@ -139,11 +165,11 @@
 	if (browser && ['mermaid.live', 'netlify'].some((path) => window.location.host.includes(path))) {
 		isNetlify = true;
 	}
-	serializedState.subscribe((encodedState: string) => {
-		iUrl = `${rendererUrl}/img/${encodedState}`;
-		svgUrl = `${rendererUrl}/svg/${encodedState}`;
-		krokiUrl = `${krokiRendererUrl}/mermaid/svg/${pakoSerde.serialize($codeStore.code)}`;
-		mdCode = `[![](${iUrl})](${window.location.protocol}//${window.location.host}${window.location.pathname}#${encodedState})`;
+	stateStore.subscribe(({ code, serialized }) => {
+		iUrl = `${rendererUrl}/img/${serialized}`;
+		svgUrl = `${rendererUrl}/svg/${serialized}`;
+		krokiUrl = `${krokiRendererUrl}/mermaid/svg/${pakoSerde.serialize(code)}`;
+		mdCode = `[![](${iUrl})](${window.location.protocol}//${window.location.host}${window.location.pathname}#${serialized})`;
 	});
 </script>
 
@@ -154,21 +180,29 @@
 				><i class="far fa-copy mr-2" /> Copy Image to clipboard
 			</button>
 		{/if}
-		<button class="action-btn flex-auto" on:click={onDownloadPNG}>
+		<button id="downloadPNG" class="action-btn flex-auto" on:click={onDownloadPNG}>
 			<i class="fas fa-download mr-2" /> PNG
 		</button>
-		<button class="action-btn flex-auto" on:click={onDownloadSVG}>
+		<button id="downloadSVG" class="action-btn flex-auto" on:click={onDownloadSVG}>
 			<i class="fas fa-download mr-2" /> SVG
 		</button>
-		<button class="action-btn flex-auto">
-			<a target="_blank" href={iUrl}><i class="fas fa-external-link-alt mr-2" /> PNG</a>
-		</button>
-		<button class="action-btn flex-auto">
-			<a target="_blank" href={svgUrl}><i class="fas fa-external-link-alt mr-2" /> SVG</a>
-		</button>
-		<button class="action-btn flex-auto">
-			<a target="_blank" href={krokiUrl}><i class="fas fa-external-link-alt mr-2" /> Kroki</a>
-		</button>
+		<a target="_blank" href={iUrl}>
+			<button class="action-btn flex-auto">
+				<i class="fas fa-external-link-alt mr-2" /> PNG
+			</button>
+		</a>
+
+		<a target="_blank" href={svgUrl}>
+			<button class="action-btn flex-auto">
+				<i class="fas fa-external-link-alt mr-2" /> SVG
+			</button>
+		</a>
+
+		<a target="_blank" href={krokiUrl}>
+			<button class="action-btn flex-auto">
+				<i class="fas fa-external-link-alt mr-2" /> Kroki
+			</button>
+		</a>
 
 		<div class="flex gap-2 items-center">
 			PNG size

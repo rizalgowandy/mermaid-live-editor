@@ -7,7 +7,7 @@ const loaders: Record<string, Loader> = {
 
 export const loadDataFromUrl = async (): Promise<void> => {
 	const searchParams = new URLSearchParams(window.location.search);
-	let state: State = defaultState;
+	let state: Partial<State> = defaultState;
 	let code: string, config: string;
 	let loaded = false;
 	const codeURL: string = searchParams.get('code');
@@ -23,6 +23,9 @@ export const loadDataFromUrl = async (): Promise<void> => {
 		config = defaultState.mermaid;
 	}
 	if (!code) {
+		// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+		// @ts-ignore
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-call
 		for (const [key, value] of searchParams.entries()) {
 			if (key in loaders) {
 				try {
@@ -45,14 +48,12 @@ export const loadDataFromUrl = async (): Promise<void> => {
 					configURL
 				}
 			}
-		} as State;
+		};
 	}
 	loaded &&
 		updateCodeStore({
 			...state,
 			autoSync: true,
-			updateDiagram: true,
-			updateEditor: true
+			updateDiagram: true
 		});
-	// window.location.search = '';
 };

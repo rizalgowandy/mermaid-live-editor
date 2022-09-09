@@ -19,11 +19,7 @@ const config = {
 					base: `/mermaid-live-editor`
 			  }
 			: {},
-		trailingSlash: 'ignore',
-		vite: {
-			envPrefix: 'MERMAID_',
-			optimizeDeps: { include: ['mermaid'] }
-		}
+		trailingSlash: 'ignore'
 	}
 };
 

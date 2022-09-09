@@ -1,71 +1,106 @@
 <script lang="ts">
-	import type { EditorEvents } from '$lib/types';
-	import { codeStore } from '$lib/util/state';
+	import type { EditorMode } from '$lib/types';
+	import { stateStore, updateCode, updateConfig } from '$lib/util/state';
 	import { themeStore } from '$lib/util/theme';
+	import { syncDiagram } from '$lib/util/util';
 	import type monaco from 'monaco-editor';
-	import { createEventDispatcher, onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import initEditor from 'monaco-mermaid';
+	import { logEvent } from '$lib/util/stats';
+	import { debounceEnabled } from '$lib/util/env';
 
 	let divEl: HTMLDivElement = null;
 	let editor: monaco.editor.IStandaloneCodeEditor;
-	let Monaco;
-
-	export let text: string;
-	export let language: string;
-	export let editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = {
-		value: text,
-		language: language,
+	let Monaco: typeof monaco;
+	let editorOptions: monaco.editor.IStandaloneEditorConstructionOptions = {
 		minimap: {
 			enabled: false
 		},
 		theme: 'mermaid',
 		overviewRulerLanes: 0
 	};
-	export let errorMarkers: monaco.editor.IMarkerData[] = [];
-	let oldText = text;
-	$: editor && Monaco?.editor.setModelLanguage(editor.getModel(), language);
-	$: {
-		if (text !== oldText) {
-			if ($codeStore.updateEditor) {
-				editor?.setValue(text);
-			}
-			oldText = text;
+	let text = '';
+
+	stateStore.subscribe(({ errorMarkers, editorMode, code, mermaid }) => {
+		if (!editor) return;
+
+		// Update editor text if it's different
+		const newText = editorMode === 'code' ? code : mermaid;
+		if (newText !== text) {
+			editor.setValue(newText);
+			text = newText;
 		}
-		editor && Monaco?.editor.setModelMarkers(editor.getModel(), 'test', errorMarkers);
-	}
+
+		// Update editor mode if it's different
+		const language = editorMode === 'code' ? 'mermaid' : 'json';
+		if (editor.getModel().getLanguageId() !== language) {
+			Monaco?.editor.setModelLanguage(editor.getModel(), language);
+		}
+
+		// Display errors if present
+		if (errorMarkers.length > 0) {
+			Monaco?.editor.setModelMarkers(editor.getModel(), 'test', errorMarkers);
+		}
+	});
 
 	themeStore.subscribe(({ isDark }) => {
 		editor && Monaco?.editor.setTheme(isDark ? 'mermaid-dark' : 'mermaid');
 	});
 
-	const dispatch = createEventDispatcher<EditorEvents>();
+	const handleUpdate = (text: string, mode: EditorMode) => {
+		if (mode === 'code') {
+			updateCode(text);
+		} else {
+			updateConfig(text);
+		}
+	};
+
+	// Debounce state updates to avoid performance issues
+	let debounce: { [key: string]: number } = {};
+	const updateHandler = (newText: string) => {
+		text = newText;
+		const mode = $stateStore.editorMode;
+		if (debounceEnabled) {
+			clearTimeout(debounce[mode]);
+			debounce[mode] = window.setTimeout(() => {
+				handleUpdate(text, mode);
+			}, 300);
+		} else {
+			handleUpdate(text, mode);
+		}
+	};
+
 	const loadMonaco = async () => {
 		let i = 0;
-		while (i++ < 10) {
+		while (i++ < 500) {
 			try {
 				// @ts-ignore : This is a hack to handle a svelte-kit error when importing monaco.
-				Monaco = monaco;
+				Monaco = window.monaco;
 				return;
 			} catch {
-				await new Promise((r) => setTimeout(r, 500));
+				await new Promise((r) => setTimeout(r, 100));
 			}
 		}
 		alert('Loading Monaco Editor failed. Please try refreshing the page.');
 	};
+
 	onMount(async () => {
-		try {
-			// @ts-ignore : This is a hack to handle a svelte-kit error when importing monaco.
-			Monaco = monaco;
-		} catch {
-			await loadMonaco(); // Fix https://github.com/mermaid-js/mermaid-live-editor/issues/175
-		}
+		await loadMonaco(); // Fix https://github.com/mermaid-js/mermaid-live-editor/issues/175
 		initEditor(Monaco);
 		editor = Monaco.editor.create(divEl, editorOptions);
 		editor.onDidChangeModelContent(() => {
-			text = editor.getValue();
-			dispatch('update', {
-				text
-			});
+			updateHandler(editor.getValue());
+		});
+		editor.addAction({
+			id: 'mermaid-render-diagram',
+			label: 'Render Diagram',
+			keybindings: [Monaco.KeyMod.CtrlCmd | Monaco.KeyCode.Enter],
+			run: function () {
+				syncDiagram();
+				void logEvent('renderDiagram', {
+					method: 'keyboadShortcut'
+				});
+			}
 		});
 		Monaco?.editor.setTheme($themeStore.isDark ? 'mermaid-dark' : 'mermaid');
 		const resizeObserver = new ResizeObserver((entries) => {

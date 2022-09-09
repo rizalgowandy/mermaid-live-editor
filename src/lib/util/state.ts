@@ -1,9 +1,12 @@
 import { writable, get, derived } from 'svelte/store';
-import type { Readable } from 'svelte/store';
-import { persist, localStorage } from '@macfja/svelte-persistent-store';
-import type { State } from '$lib/types';
+import { persist, localStorage } from './persist';
 import { saveStatistics } from './stats';
 import { serializeState, deserializeState } from './serde';
+import { cmdKey } from './util';
+import mermaid from 'mermaid';
+
+import type { Readable } from 'svelte/store';
+import type { MarkerData, State, ValidatedState } from '$lib/types';
 
 export const defaultState: State = {
 	code: `graph TD
@@ -20,7 +23,6 @@ export const defaultState: State = {
 		null,
 		2
 	),
-	updateEditor: false,
 	autoSync: true,
 	updateDiagram: true
 };
@@ -36,14 +38,49 @@ const urlParseFailedState = `graph TD
     G --> |"No :("| H(Try using the Timeline tab in History <br/>from same browser you used to create the diagram.)
     click D href "https://github.com/mermaid-js/mermaid-live-editor/issues/new?assignees=&labels=bug&template=bug_report.md&title=Broken%20link" "Raise issue"`;
 
-export const codeStore = persist(writable(defaultState), localStorage(), 'codeStore');
-export const serializedState: Readable<string> = derived([codeStore], ([code], set) => {
-	set(serializeState(code));
+// inputStateStore handles all updates and is shared externally when exporting via URL, History, etc.
+export const inputStateStore = persist(writable(defaultState), localStorage(), 'codeStore');
+
+// All internal reads should be done via stateStore, but it should not be persisted/shared externally.
+export const stateStore: Readable<ValidatedState> = derived([inputStateStore], ([state]) => {
+	const processed: ValidatedState = {
+		...state,
+		serialized: '',
+		errorMarkers: [],
+		error: undefined,
+		editorMode: state.editorMode ?? 'code'
+	};
+
+	// No changes should be done to fields part of `state`.
+	try {
+		processed.serialized = serializeState(state);
+		mermaid.parse(state.code);
+		JSON.parse(state.mermaid);
+	} catch (e) {
+		processed.error = e;
+		console.error(e);
+		if (e.hash) {
+			try {
+				const marker: MarkerData = {
+					severity: 8, // Error
+					startLineNumber: e.hash.loc.first_line,
+					startColumn: e.hash.loc.first_column,
+					endLineNumber: e.hash.loc.last_line,
+					endColumn: (e.hash.loc.last_column as number) + 1,
+					message: e.str
+				};
+				processed.errorMarkers = [marker];
+			} catch (err) {
+				console.error('Error without line helper', err);
+			}
+		}
+	}
+	return processed;
 });
 
 export const loadState = (data: string): void => {
 	let state: State;
-	console.log('Loading', data);
+	console.log(`Loading '${data}'`);
 	try {
 		state = deserializeState(data);
 		const mermaidConfig: { [key: string]: string } =
@@ -57,69 +94,80 @@ export const loadState = (data: string): void => {
 		) {
 			delete mermaidConfig.securityLevel; // Prevent setting overriding securityLevel when loading state to mitigate possible XSS attack
 		}
-
 		state.mermaid = JSON.stringify(mermaidConfig, null, 2);
 	} catch (e) {
-		state = get(codeStore);
+		state = get(inputStateStore);
 		if (data) {
 			console.error('Init error', e);
 			state.code = urlParseFailedState;
+			state.mermaid = defaultState.mermaid;
 		}
 	}
-	updateCodeStore({ ...state, updateEditor: true });
+	updateCodeStore({ ...state });
 };
 
-export const updateCodeStore = (newState: State): void => {
-	codeStore.update((state) => {
+export const updateCodeStore = (newState: Partial<State>): void => {
+	inputStateStore.update((state) => {
+		// console.log({ newState, state });
 		return { ...state, ...newState };
 	});
 };
 
 let prompted = false;
-export const updateCode = (code: string, updateEditor: boolean, updateDiagram = false): void => {
+export const updateCode = (
+	code: string,
+	{
+		updateDiagram = false,
+		resetPanZoom = false
+	}: { updateDiagram?: boolean; resetPanZoom?: boolean } = {}
+): void => {
 	saveStatistics(code);
 	const lines = (code.match(/\n/g) || '').length + 1;
 
-	if (lines > 50 && !prompted && get(codeStore).autoSync) {
+	if (lines > 50 && !prompted && get(stateStore).autoSync) {
 		const turnOff = confirm(
-			'Long diagram detected. Turn off Auto Sync? Click the sync logo to manually sync.'
+			`Long diagram detected. Turn off Auto Sync? Use ${cmdKey} + Enter or click the sync logo to manually sync.`
 		);
 		prompted = true;
 		if (turnOff) {
 			updateCodeStore({
 				autoSync: false
-			} as State);
+			});
 		}
 	}
 
-	codeStore.update((state) => {
-		return { ...state, code, updateEditor, updateDiagram };
+	inputStateStore.update((state) => {
+		if (resetPanZoom) {
+			state.pan = undefined;
+			state.zoom = undefined;
+		}
+		return { ...state, code, updateDiagram };
 	});
 };
 
-export const updateConfig = (config: string, updateEditor: boolean): void => {
-	codeStore.update((state) => {
-		return { ...state, mermaid: config, updateEditor };
+export const updateConfig = (config: string): void => {
+	inputStateStore.update((state) => {
+		return { ...state, mermaid: config };
 	});
 };
 
 export const toggleDarkTheme = (dark: boolean): void => {
-	codeStore.update((state) => {
+	inputStateStore.update((state) => {
 		const config = JSON.parse(state.mermaid);
 		if (!config.theme || ['dark', 'default'].includes(config.theme)) {
 			config.theme = dark ? 'dark' : 'default';
 		}
 
-		return { ...state, mermaid: JSON.stringify(config, null, 2), updateEditor: true };
+		return { ...state, mermaid: JSON.stringify(config, null, 2) };
 	});
 };
 
 export const initURLSubscription = (): void => {
-	serializedState.subscribe((state: string) => {
-		history.replaceState(undefined, undefined, `#${state}`);
+	stateStore.subscribe(({ serialized }) => {
+		history.replaceState(undefined, undefined, `#${serialized}`);
 	});
 };
 
 export const getStateString = (): string => {
-	return JSON.stringify(get(codeStore));
+	return JSON.stringify(get(inputStateStore));
 };

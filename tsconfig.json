@@ -5,7 +5,13 @@
 		"src/**/*.svelte",
 		"cypress/**/*.ts",
 		"cypress/**/*.js",
-		"static/**/*.js"
+		"static/**/*.js",
+		"static/**/*.json"
 	],
+	"compilerOptions": {
+		"resolveJsonModule": true,
+		"allowSyntheticDefaultImports": true,
+		"types": ["vitest/importMeta"]
+	},
 	"extends": "./.svelte-kit/tsconfig.json"
 }
