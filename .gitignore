@@ -9,5 +9,7 @@ yarn-error.log
 /build
 /functions
 /snapshots.js
+/cypress/downloads
 /cypress/videos
 /cypress/screenshots
+.env.local
